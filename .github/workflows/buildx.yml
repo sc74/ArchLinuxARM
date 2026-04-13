@@ -1,11 +1,10 @@
 name: Build & Push Docker image (GHCR)
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]
     tags: [ "v*", "release-*" ]
-  pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
