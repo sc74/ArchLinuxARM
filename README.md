@@ -54,6 +54,14 @@ Build AstroArch (KDE Plasma + astrophotography stack):
 make build-astroarch
 ```
 
+Build an AUR package (and any AUR-only dependencies) for `aarch64` and copy the resulting package file(s) into the current directory:
+
+```bash
+make build-aur PKG=<aur-package-name>
+```
+
+`scripts/build-aur.sh` recursively resolves and builds AUR-only dependencies, and PKGBUILDs that don't declare `aarch64` are built anyway via `makepkg --ignorearch`. Dependencies are installed by that script running as root directly (not via `sudo`) — BuildKit mounts `RUN` steps `nosuid`, so a setuid tool like `sudo` can never regain root once a step has dropped to an unprivileged user; only root-to-non-root (`su`, to run `makepkg` itself) works reliably there.
+
 ## Make targets
 
 | Target | Description |
@@ -64,6 +72,7 @@ make build-astroarch
 | `build-aarch64-rootfs` | Exports the aarch64 rootfs as `archlinuxarm-aarch64-rootfs.tar`. |
 | `build-astroarch` | AstroArch desktop image (KDE + INDI stack). |
 | `build-astroarch-rootfs` | Builds the AstroArch rootfs image (`astroarch-rootfs:latest`). |
+| `build-aur PKG=<name>` | Builds an AUR package (and any AUR-only dependencies) for `aarch64` (`dockerfiles/Dockerfile.aur`) and copies the resulting `.pkg.tar.*` file(s) into the current directory. |
 | `create-rootfs-container` | Creates a throwaway container from `astroarch-rootfs:latest` to extract its filesystem. |
 | `copy-rootfs-tar` | Copies `astroarch-rootfs.tar` out of that container into `./rootfs.tar` and removes it. |
 | `prepare-rpi-img` | Runs the three targets above, then `scripts/build_img.sh` to produce a bootable `archarm-rpi-aarch64.img`. |

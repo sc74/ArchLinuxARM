@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1.7
+
+###############################################
+# BUILDER: ArchLinuxARM (aarch64) + base-devel
+###############################################
+FROM ghcr.io/devducks/archlinuxarm:latest AS builder
+
+RUN pacman-key --init && pacman-key --populate archlinuxarm
+
+RUN pacman -Syu --noconfirm --needed base-devel git
+
+# makepkg refuses to run as root, so builds happen as an unprivileged user.
+# Dependency (and package) installation is done directly as root by
+# scripts/build-aur.sh instead of via sudo: see that script for why.
+RUN useradd -m -s /bin/bash builder
+
+ENV PKGDEST=/home/builder/output
+RUN mkdir -p ${PKGDEST} && chown builder:builder ${PKGDEST}
+
+COPY scripts/build-aur.sh /usr/local/bin/build-aur.sh
+COPY patches/ /patches/
+
+ARG PKG
+RUN test -n "$PKG" || { echo "PKG build-arg is required, e.g. --build-arg PKG=opencv4"; exit 1; }
+
+RUN /usr/local/bin/build-aur.sh "$PKG"
+
+###############################################
+# EXPORT-ONLY: built package artifacts
+###############################################
+FROM scratch AS export
+COPY --from=builder /home/builder/output/ /

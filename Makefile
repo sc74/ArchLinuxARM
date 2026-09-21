@@ -57,6 +57,20 @@ build-astroarch-rootfs: binfmt
           --load \
 	  .
 
+.PHONY: build-aur
+build-aur: binfmt
+	@if [ -z "$(PKG)" ]; then \
+	  echo "Usage: make build-aur PKG=<aur-package-name>"; \
+	  exit 1; \
+	fi
+	docker buildx build \
+	  --platform $(PLATFORMS) \
+	  -f dockerfiles/Dockerfile.aur \
+	  --target export \
+	  --build-arg PKG=$(PKG) \
+	  --output type=local,dest=$(CURDIR) \
+	  .
+
 .PHONY: create-rootfs-container
 create-rootfs-container:
 	docker create --platform=$(PLATFORMS) --name take astroarch-rootfs:latest sh
