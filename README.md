@@ -75,7 +75,8 @@ make build-aur PKG=<aur-package-name>
 | `build-aur PKG=<name>` | Builds an AUR package (and any AUR-only dependencies) for `aarch64` (`dockerfiles/Dockerfile.aur`) and copies the resulting `.pkg.tar.*` file(s) into the current directory. |
 | `create-rootfs-container` | Creates a throwaway container from `astroarch-rootfs:latest` to extract its filesystem. |
 | `copy-rootfs-tar` | Copies `astroarch-rootfs.tar` out of that container into `./rootfs.tar` and removes it. |
-| `prepare-rpi-img` | Runs the three targets above, then `scripts/build_img.sh` to produce a bootable `archarm-rpi-aarch64.img`. |
+| `prepare-rpi-img` | Runs the three targets above, then `scripts/build_img.sh`, to produce a bootable `archarm-rpi-aarch64.img` for Raspberry Pi. |
+| `prepare-orangepi5b-img` | Same, with `GENERIC_AARCH64=true` and `BOARD=orangepi5b`, producing `archarm-orangepi5b-aarch64.img` for the Orange Pi 5 / 5B (rk3588s). |
 
 ## Image details
 
@@ -102,13 +103,14 @@ make build-aur PKG=<aur-package-name>
 - Downloads astrometry.net index files into the default user's KStars data directory.
 - `astroarch-rootfs` target builds and exports the rootfs directly (no QEMU boot step is needed to finalize the image).
 
-## Building a Raspberry Pi image
+## Building a bootable image
 
 ```bash
-make prepare-rpi-img
+make prepare-rpi-img          # Raspberry Pi
+make prepare-orangepi5b-img   # Orange Pi 5 / 5B (rk3588s)
 ```
 
-This produces `archarm-rpi-aarch64.img`: a partitioned disk image with a FAT32 `/boot` and an ext4 `/`, built by `scripts/build_img.sh`.
+This produces `archarm-rpi-aarch64.img` or `archarm-orangepi5b-aarch64.img`: a partitioned disk image with a FAT32 `/boot` and an ext4 `/`, built by `scripts/build_img.sh`. The Orange Pi target builds against the generic `linux-aarch64` kernel instead of `linux-rpi`, and embeds a prebuilt rk3588s U-Boot (from [schneid-l/u-boot-rockchip](https://github.com/schneid-l/u-boot-rockchip)) ahead of the partition table instead of RPi firmware boot files.
 
 To customize the image before flashing, boot it under QEMU, make your changes, and shut down cleanly:
 
@@ -123,7 +125,7 @@ sudo dd if=archarm-rpi-aarch64.img of=/dev/sdX bs=4M status=progress
 sync
 ```
 
-Insert the card into the Pi and boot; SSH will be available once DHCP assigns an address.
+Insert the card into the board and boot; SSH will be available once DHCP assigns an address.
 
 ## Default credentials
 

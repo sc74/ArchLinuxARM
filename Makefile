@@ -1,5 +1,6 @@
 PLATFORMS?=linux/arm64
 IMAGE?=archlinuxarm
+GENERIC_AARCH64?=false
 
 .PHONY: binfmt
 binfmt:
@@ -39,6 +40,7 @@ build-aarch64-rootfs: binfmt
 .PHONY: build-astroarch
 build-astroarch: binfmt
 	docker buildx build \
+	  --build-arg GENERIC_AARCH64=$(GENERIC_AARCH64) \
 	  --platform $(PLATFORMS) \
 	  -t astroarch:latest \
           -f dockerfiles/Dockerfile.astroarch \
@@ -50,6 +52,7 @@ build-astroarch: binfmt
 build-astroarch-rootfs: binfmt
 	docker buildx build \
 	  --build-arg BUILDKIT_SANDBOX_SIZE=30G \
+	  --build-arg GENERIC_AARCH64=$(GENERIC_AARCH64) \
 	  --platform $(PLATFORMS) \
 	  -t astroarch-rootfs:latest \
           -f dockerfiles/Dockerfile.astroarch \
@@ -81,5 +84,11 @@ copy-rootfs-tar:
 	docker rm -f take
 
 .PHONY: prepare-rpi-img
+prepare-rpi-img: GENERIC_AARCH64=false
 prepare-rpi-img: build-astroarch-rootfs create-rootfs-container copy-rootfs-tar
-	./scripts/build_img.sh
+	BOARD=rpi IMG=archarm-rpi-aarch64.img ./scripts/build_img.sh
+
+.PHONY: prepare-orangepi5b-img
+prepare-orangepi5b-img: GENERIC_AARCH64=true
+prepare-orangepi5b-img: build-astroarch-rootfs create-rootfs-container copy-rootfs-tar
+	BOARD=orangepi5b IMG=archarm-orangepi5b-aarch64.img ./scripts/build_img.sh

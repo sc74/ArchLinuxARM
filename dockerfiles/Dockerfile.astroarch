@@ -101,8 +101,16 @@ RUN pacman -Sy \
     zsh \
     --noconfirm
 
+# Set to "true" when targeting generic aarch64 boards (e.g. Orange Pi) instead
+# of a Raspberry Pi: skips the linux-rpi kernel install, since the base image
+# already carries the generic linux-aarch64 kernel.
+ARG GENERIC_AARCH64=false
+
 RUN curl -O  https://raw.githubusercontent.com/devDucks/astroarch/refs/heads/main/astroarch_build.sh && \
-    sed -i '/\/etc\/hosts/d; /\/etc\/hostname/d;' astroarch_build.sh
+    sed -i '/\/etc\/hosts/d; /\/etc\/hostname/d;' astroarch_build.sh && \
+    if [ "$GENERIC_AARCH64" = "true" ]; then \
+      sed -i 's/pacman -Syu linux-rpi linux-rpi-headers linux-firmware --noconfirm --ask 4/pacman -Syu linux-firmware --noconfirm --ask 4/' astroarch_build.sh; \
+    fi
 
 RUN bash astroarch_build.sh
 
