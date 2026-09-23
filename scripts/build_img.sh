@@ -2,23 +2,30 @@
 set -euo pipefail
 
 # --- settings ---
-BOARD=${BOARD:-rpi}       # rpi | orangepi5b
+BOARD=${BOARD:-rpi}
 IMG=${IMG:-archarm-${BOARD}-aarch64.img}
 SIZE=${SIZE:-20G}         # total image size
 BOOT_MB=${BOOT_MB:-768}   # FAT32 /boot size in MiB
 ROOT_LABEL=${ROOT_LABEL:-ALARM_ROOT}
 BOOT_LABEL=${BOOT_LABEL:-ALARM_BOOT}
 ROOTFS_TAR=${ROOTFS_TAR:-rootfs.tar}
-# Orange Pi 5B (rk3588s): pre-built, signed U-Boot + ATF + DDR blob, combined
-# into a single binary written raw at sector 64 (32KiB) ahead of the first
-# partition. See https://github.com/schneid-l/u-boot-rockchip
-UBOOT_URL=${UBOOT_URL:-https://github.com/schneid-l/u-boot-rockchip/releases/latest/download/u-boot-orangepi-5-rk3588s.bin}
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+BOARD_CONF="${SCRIPT_DIR}/../boards/${BOARD}.conf"
+
+# --- board profile ---
+# Each boards/<name>.conf sets: KERNEL_FLAVOR, BOOT_STRATEGY (firmware|extlinux),
+# BOOT_START (sectors), UBOOT_URL + UBOOT_OFFSET_SECTORS (extlinux boards that
+# need a bootloader blob written ahead of the partition table), CONSOLE.
+[ -f "$BOARD_CONF" ] || { echo "Unknown BOARD=$BOARD (no $BOARD_CONF)"; exit 1; }
+# shellcheck disable=SC1090
+source "$BOARD_CONF"
 
 # sanity
 [ -f "$ROOTFS_TAR" ] || { echo "Missing $ROOTFS_TAR"; exit 1; }
-case "$BOARD" in
-  rpi|orangepi5b) ;;
-  *) echo "Unknown BOARD=$BOARD (expected rpi or orangepi5b)"; exit 1 ;;
+case "$BOOT_STRATEGY" in
+  firmware|extlinux) ;;
+  *) echo "Unknown BOOT_STRATEGY=$BOOT_STRATEGY in $BOARD_CONF"; exit 1 ;;
 esac
 
 # tools needed: sfdisk, losetup, mkfs.vfat, mkfs.ext4, tar, rsync or cp -a
@@ -28,16 +35,7 @@ command -v losetup >/dev/null
 # --- create sparse disk file ---
 truncate -s "$SIZE" "$IMG"
 
-# --- partition table: 768MiB FAT32 boot, rest ext4 root ---
-# rpi: 1MiB alignment is enough, nothing lives ahead of partition 1.
-# orangepi5b: the rk3588s U-Boot blob (idbloader+u-boot.itb, ~9.3MiB) is
-# written raw starting at sector 64, so partition 1 must start well past it -
-# 16MiB is the conventional Rockchip/Armbian offset.
-if [ "$BOARD" = "orangepi5b" ]; then
-  BOOT_START=32768                            # 16MiB (512b sectors)
-else
-  BOOT_START=2048                             # 1MiB (512b sectors)
-fi
+# --- partition table: BOOT_START (board-defined), 768MiB FAT32 boot, rest ext4 root ---
 BOOT_SIZE=$(( BOOT_MB * 2048 ))               # sectors (MiB * 2048)
 sfdisk "$IMG" <<EOF
 label: dos
@@ -46,13 +44,13 @@ ${IMG}1 : start=${BOOT_START}, size=${BOOT_SIZE}, type=c
 ${IMG}2 : start=$((BOOT_START+BOOT_SIZE)), type=83
 EOF
 
-# --- orangepi5b: fetch and embed U-Boot ahead of the partition table ---
-if [ "$BOARD" = "orangepi5b" ]; then
+# --- fetch and embed a bootloader blob ahead of the partition table, if any ---
+if [ -n "${UBOOT_URL:-}" ]; then
   command -v curl >/dev/null
   UBOOT_BIN=$(mktemp)
   trap 'rm -f "$UBOOT_BIN"' EXIT
   curl -fL "$UBOOT_URL" -o "$UBOOT_BIN"
-  dd if="$UBOOT_BIN" of="$IMG" bs=512 seek=64 conv=notrunc,fsync
+  dd if="$UBOOT_BIN" of="$IMG" bs=512 seek="$UBOOT_OFFSET_SECTORS" conv=notrunc,fsync
   rm -f "$UBOOT_BIN"
   trap - EXIT
 fi
@@ -90,9 +88,16 @@ if [ -d /mnt/arch-root/boot ] && [ -n "$(ls -A /mnt/arch-root/boot)" ]; then
   sudo cp -a /mnt/arch-root/boot/* /mnt/arch-boot/
 fi
 
+# --- build "console=X" args from the board's (possibly multi-value) CONSOLE ---
+CONSOLE_ARGS=""
+for c in $CONSOLE; do
+  CONSOLE_ARGS="${CONSOLE_ARGS}console=${c} "
+done
+CONSOLE_ARGS="${CONSOLE_ARGS% }"
+
 # --- minimal boot config depending on strategy ---
-if [ "$BOARD" = "orangepi5b" ]; then
-  # U-Boot (embedded ahead of partition 1 above) loads the kernel via
+if [ "$BOOT_STRATEGY" = "extlinux" ]; then
+  # U-Boot (embedded ahead of partition 1 above, if any) loads the kernel via
   # extlinux.conf; linux-aarch64 provides /Image, /dtbs, /initramfs-linux.img.
   if [ ! -d /mnt/arch-boot/extlinux ]; then
     sudo install -d /mnt/arch-boot/extlinux
@@ -105,11 +110,11 @@ LABEL arch
   LINUX /Image
   INITRD /initramfs-linux.img
   FDTDIR /dtbs
-  APPEND root=PARTUUID=${PARTUUID} rw rootwait console=ttyS2,1500000
+  APPEND root=PARTUUID=${PARTUUID} rw rootwait ${CONSOLE_ARGS}
 EOF
   fi
 else
-  # If you installed linux-rpi (+ raspberrypi-bootloader), firmware boots kernel*.img via config.txt/cmdline.txt
+  # Firmware boots kernel*.img via config.txt/cmdline.txt
   if [ -f /mnt/arch-boot/kernel8.img ]; then
     # Only write a fallback config.txt if the rootfs didn't already provide one (e.g. from astroarch_build.sh)
     if [ ! -f /mnt/arch-boot/config.txt ]; then
@@ -120,7 +125,7 @@ else
     if [ -f /mnt/arch-boot/cmdline.txt ]; then
       sudo sed -i "s|root=[^ ]*|root=PARTUUID=${PARTUUID}|" /mnt/arch-boot/cmdline.txt
     else
-      echo "console=serial0,115200 console=ttyAMA0,115200 root=PARTUUID=${PARTUUID} rw rootwait" \
+      echo "${CONSOLE_ARGS} root=PARTUUID=${PARTUUID} rw rootwait" \
         | sudo tee /mnt/arch-boot/cmdline.txt >/dev/null
     fi
   fi
@@ -139,7 +144,7 @@ LABEL arch
   LINUX /Image
   INITRD /initramfs-linux.img
   FDTDIR /dtbs
-  APPEND root=PARTUUID=${PARTUUID} rw rootwait console=ttyAMA0,115200 console=serial0,115200
+  APPEND root=PARTUUID=${PARTUUID} rw rootwait ${CONSOLE_ARGS}
 EOF
   fi
 fi

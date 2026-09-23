@@ -1,6 +1,6 @@
 PLATFORMS?=linux/arm64
 IMAGE?=archlinuxarm
-GENERIC_AARCH64?=false
+KERNEL_FLAVOR?=rpi
 
 .PHONY: binfmt
 binfmt:
@@ -40,7 +40,7 @@ build-aarch64-rootfs: binfmt
 .PHONY: build-astroarch
 build-astroarch: binfmt
 	docker buildx build \
-	  --build-arg GENERIC_AARCH64=$(GENERIC_AARCH64) \
+	  --build-arg KERNEL_FLAVOR=$(KERNEL_FLAVOR) \
 	  --platform $(PLATFORMS) \
 	  -t astroarch:latest \
           -f dockerfiles/Dockerfile.astroarch \
@@ -52,7 +52,7 @@ build-astroarch: binfmt
 build-astroarch-rootfs: binfmt
 	docker buildx build \
 	  --build-arg BUILDKIT_SANDBOX_SIZE=30G \
-	  --build-arg GENERIC_AARCH64=$(GENERIC_AARCH64) \
+	  --build-arg KERNEL_FLAVOR=$(KERNEL_FLAVOR) \
 	  --platform $(PLATFORMS) \
 	  -t astroarch-rootfs:latest \
           -f dockerfiles/Dockerfile.astroarch \
@@ -83,12 +83,16 @@ copy-rootfs-tar:
 	docker cp take:/astroarch-rootfs.tar ./rootfs.tar
 	docker rm -f take
 
-.PHONY: prepare-rpi-img
-prepare-rpi-img: GENERIC_AARCH64=false
-prepare-rpi-img: build-astroarch-rootfs create-rootfs-container copy-rootfs-tar
-	BOARD=rpi IMG=archarm-rpi-aarch64.img ./scripts/build_img.sh
+# --- Bootable images ---
+# Board profiles live in boards/<name>.conf (KERNEL_FLAVOR, boot strategy,
+# bootloader, console, ...). Add a board by dropping in a new .conf file -
+# no Makefile changes needed.
+.PHONY: check-board
+check-board:
+	@[ -n "$(BOARD)" ] || { echo "Usage: make prepare-img BOARD=<board>"; exit 1; }
+	@[ -f boards/$(BOARD).conf ] || { echo "Unknown BOARD=$(BOARD) (no boards/$(BOARD).conf)"; exit 1; }
 
-.PHONY: prepare-orangepi5b-img
-prepare-orangepi5b-img: GENERIC_AARCH64=true
-prepare-orangepi5b-img: build-astroarch-rootfs create-rootfs-container copy-rootfs-tar
-	BOARD=orangepi5b IMG=archarm-orangepi5b-aarch64.img ./scripts/build_img.sh
+.PHONY: prepare-img
+prepare-img: KERNEL_FLAVOR = $(shell . boards/$(BOARD).conf 2>/dev/null && echo $$KERNEL_FLAVOR)
+prepare-img: check-board build-astroarch-rootfs create-rootfs-container copy-rootfs-tar
+	BOARD=$(BOARD) IMG=archarm-$(BOARD)-aarch64.img ./scripts/build_img.sh
