@@ -1,2 +1,2 @@
-archarm-rpi-aarch64.img
-rootfs.tar
+archarm-*-aarch64.img
+*.tar
