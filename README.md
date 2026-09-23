@@ -75,7 +75,7 @@ make build-aur PKG=<aur-package-name>
 | `build-aur PKG=<name>` | Builds an AUR package (and any AUR-only dependencies) for `aarch64` (`dockerfiles/Dockerfile.aur`) and copies the resulting `.pkg.tar.*` file(s) into the current directory. |
 | `create-rootfs-container` | Creates a throwaway container from `astroarch-rootfs:latest` to extract its filesystem. |
 | `copy-rootfs-tar` | Copies `astroarch-rootfs.tar` out of that container into `./rootfs.tar` and removes it. |
-| `prepare-img BOARD=<board>` | Builds the rootfs with the board's kernel flavor, then runs `scripts/build_img.sh` to produce a bootable `archarm-<board>-aarch64.img`. `<board>` must match a file in `boards/` (currently `rpi`, `orangepi5b`). |
+| `prepare-img BOARD=<board>` | Builds the rootfs with the board's kernel flavor, then runs `scripts/build_img.sh` to produce a bootable `archarm-<board>-aarch64.img`. `<board>` must match a file in `boards/` (currently `rpi`, `orangepi5b`, `odroid-n2plus`). |
 
 ## Image details
 
@@ -105,18 +105,20 @@ make build-aur PKG=<aur-package-name>
 ## Building a bootable image
 
 ```bash
-make prepare-img BOARD=rpi          # Raspberry Pi
-make prepare-img BOARD=orangepi5b   # Orange Pi 5 / 5B (rk3588s)
+make prepare-img BOARD=rpi            # Raspberry Pi
+make prepare-img BOARD=orangepi5b     # Orange Pi 5 / 5B (rk3588s)
+make prepare-img BOARD=odroid-n2plus  # Odroid N2+ (Amlogic S922X)
 ```
 
-This produces `archarm-<board>-aarch64.img`: a partitioned disk image with a FAT32 `/boot` and an ext4 `/`, built by `scripts/build_img.sh`. Everything board-specific — kernel flavor, boot strategy, partition offset, an optional bootloader blob to embed ahead of the partition table, and the kernel console — lives in `boards/<board>.conf`, not in the script or the Makefile:
+This produces `archarm-<board>-aarch64.img`: a partitioned disk image with a FAT32 `/boot` and an ext4 `/`, built by `scripts/build_img.sh`. Everything board-specific — kernel flavor, boot strategy, partition offset, how to embed a bootloader ahead of the partition table, and the kernel console — lives in `boards/<board>.conf`, not in the script or the Makefile:
 
 | Board | Kernel | Boot strategy | Notes |
 |---|---|---|---|
 | `rpi` | `linux-rpi` | `firmware` (config.txt/cmdline.txt) | Nothing lives ahead of partition 1. |
 | `orangepi5b` | generic `linux-aarch64` | `extlinux` | Embeds a prebuilt rk3588s U-Boot (from [schneid-l/u-boot-rockchip](https://github.com/schneid-l/u-boot-rockchip)) at sector 64, ahead of the partition table. |
+| `odroid-n2plus` | generic `linux-aarch64` | `extlinux` | Embeds ArchLinux ARM's mainline U-Boot for the N2 family via a two-step, MBR-preserving write (Amlogic's install scheme, not a single raw offset). **Not yet boot-tested on real hardware.** |
 
-To add a new board, drop in a `boards/<name>.conf` setting `KERNEL_FLAVOR`, `BOOT_STRATEGY` (`firmware` or `extlinux`), `BOOT_START`, `CONSOLE`, and (for `extlinux` boards that need one) `UBOOT_URL`/`UBOOT_OFFSET_SECTORS` — no script or Makefile changes required.
+To add a new board, drop in a `boards/<name>.conf` setting `KERNEL_FLAVOR`, `BOOT_STRATEGY` (`firmware` or `extlinux`), `BOOT_START`, `CONSOLE`, and (for `extlinux` boards that need one) `UBOOT_URL`. The default bootloader install is a single `dd` at `UBOOT_OFFSET_SECTORS`; a board whose SoC needs a different write sequence (like Amlogic's MBR-preserving two-step write) overrides the `install_bootloader()` shell function in its own `.conf` instead of touching `scripts/build_img.sh`.
 
 To customize the image before flashing, boot it under QEMU, make your changes, and shut down cleanly:
 
@@ -165,7 +167,8 @@ Adjust mirrors by editing the relevant Dockerfile.
 .
 ├── boards/
 │   ├── rpi.conf
-│   └── orangepi5b.conf
+│   ├── orangepi5b.conf
+│   └── odroid-n2plus.conf
 ├── configs/
 │   └── resolv.conf
 ├── dockerfiles/

@@ -13,10 +13,20 @@ ROOTFS_TAR=${ROOTFS_TAR:-rootfs.tar}
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 BOARD_CONF="${SCRIPT_DIR}/../boards/${BOARD}.conf"
 
+# --- default bootloader install: one raw write at a fixed sector offset ---
+# (Rockchip-style: a single signed blob dropped wholesale ahead of the
+# partition table.) Boards with a different install sequence - e.g. Amlogic's
+# MBR-preserving two-step write - override this function in their .conf.
+install_bootloader() {
+  local uboot_bin="$1" img="$2"
+  dd if="$uboot_bin" of="$img" bs=512 seek="$UBOOT_OFFSET_SECTORS" conv=notrunc,fsync
+}
+
 # --- board profile ---
 # Each boards/<name>.conf sets: KERNEL_FLAVOR, BOOT_STRATEGY (firmware|extlinux),
-# BOOT_START (sectors), UBOOT_URL + UBOOT_OFFSET_SECTORS (extlinux boards that
-# need a bootloader blob written ahead of the partition table), CONSOLE.
+# BOOT_START (sectors), UBOOT_URL (extlinux boards that need a bootloader blob
+# written ahead of the partition table), CONSOLE, and optionally overrides
+# UBOOT_OFFSET_SECTORS or the install_bootloader() function above.
 [ -f "$BOARD_CONF" ] || { echo "Unknown BOARD=$BOARD (no $BOARD_CONF)"; exit 1; }
 # shellcheck disable=SC1090
 source "$BOARD_CONF"
@@ -50,7 +60,7 @@ if [ -n "${UBOOT_URL:-}" ]; then
   UBOOT_BIN=$(mktemp)
   trap 'rm -f "$UBOOT_BIN"' EXIT
   curl -fL "$UBOOT_URL" -o "$UBOOT_BIN"
-  dd if="$UBOOT_BIN" of="$IMG" bs=512 seek="$UBOOT_OFFSET_SECTORS" conv=notrunc,fsync
+  install_bootloader "$UBOOT_BIN" "$IMG"
   rm -f "$UBOOT_BIN"
   trap - EXIT
 fi
