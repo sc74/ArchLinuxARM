@@ -18,11 +18,14 @@ env:
   REGISTRY: ghcr.io
   MINIMAL_IMAGE_NAME: ${{ github.repository_owner }}/archlinuxarm-basic
   ALARM_IMAGE_NAME: ${{ github.repository_owner }}/archlinuxarm
+  ASTROARCH_IMAGE_NAME: ${{ github.repository_owner }}/astroarch
   PLATFORMS: linux/arm64
   MINIMAL_DOCKERFILE: dockerfiles/Dockerfile.base
   ALARM_DOCKERFILE: dockerfiles/Dockerfile.aarch64
+  ASTROARCH_DOCKERFILE: dockerfiles/Dockerfile.astroarch
   TARGET: archarm
   ALARM_TARGET: builder
+  ASTROARCH_TARGET: builder
 
 jobs:
   build:
@@ -56,6 +59,7 @@ jobs:
         run: |
           echo "MINIMAL_IMAGE=${{ env.REGISTRY }}/${{ env.MINIMAL_IMAGE_NAME }}" >> $GITHUB_OUTPUT
           echo "ALARM_IMAGE=${{ env.REGISTRY }}/${{ env.ALARM_IMAGE_NAME }}" >> $GITHUB_OUTPUT
+          echo "ASTROARCH_IMAGE=${{ env.REGISTRY }}/${{ env.ASTROARCH_IMAGE_NAME }}" >> $GITHUB_OUTPUT
 
       - name: Extract Docker metadata (tags, labels)
         id: meta-minimal
@@ -83,6 +87,20 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
 
+      - name: Extract Docker metadata (tags, labels)
+        id: meta-astroarch
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.ASTROARCH_IMAGE }}
+          # Tag strategy:
+          # - main branch -> :latest and :sha
+          # - tags like v1.2.3 -> :1.2.3 and :1.2 and :1
+          # - PRs -> :pr-<num>-<sha>
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+
       - name: Build minimal (and push when not a PR)
         id: buildx
         uses: docker/build-push-action@v6
@@ -95,6 +113,23 @@ jobs:
           tags: ${{ steps.meta-minimal.outputs.tags }}      # mirrors: -t $(IMAGE):minimal-aarch64 (+ semver / sha variants)
           labels: ${{ steps.meta-minimal.outputs.labels }}
           # Your local command used --load; in CI we push instead. (--load is single-arch only and not suited for multi-arch CI.)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+
+      - name: Build astroarch (weekly, and push when not a PR)
+        id: buildx-astroarch
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.ASTROARCH_DOCKERFILE }}
+          target: ${{ env.ASTROARCH_TARGET }}
+          platforms: ${{ env.PLATFORMS }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-astroarch.outputs.tags }}
+          labels: ${{ steps.meta-astroarch.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
