@@ -1,0 +1,11 @@
+--- a/PKGBUILD
++++ b/PKGBUILD
+@@ -131,8 +131,6 @@
+     -DBUILD_PERF_TESTS=OFF
+     -DBUILD_PROTOBUF=OFF
+     -DPROTOBUF_UPDATE_FILES=ON
+-    -DCPU_BASELINE_DISABLE=SSE3
+-    -DCPU_BASELINE_REQUIRE=SSE2
+     -DOPENCV_EXTRA_MODULES_PATH="$srcdir/$_pkgsrc_contrib/modules"
+     -DOPENCV_SKIP_PYTHON_LOADER=ON
+     # cmake's FindLAPACK doesn't add cblas to LAPACK_LIBRARIES, so we need to specify them manually

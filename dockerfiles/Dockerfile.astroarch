@@ -32,6 +32,7 @@ RUN pacman -Sy \
     discover \
     dnsmasq \
     dolphin \
+    expect \
     fakeroot \
     firefox \
     flatpak \
@@ -100,8 +101,17 @@ RUN pacman -Sy \
     zsh \
     --noconfirm
 
+# Which kernel to install, driven by the target board's boards/<name>.conf:
+#   rpi     - linux-rpi (Raspberry Pi firmware boot)
+#   generic - skip it; the base image already carries the generic
+#             linux-aarch64 kernel used by every U-Boot/extlinux board.
+ARG KERNEL_FLAVOR=rpi
+
 RUN curl -O  https://raw.githubusercontent.com/devDucks/astroarch/refs/heads/main/astroarch_build.sh && \
-    sed -i '/\/etc\/hosts/d; /\/etc\/hostname/d;' astroarch_build.sh
+    sed -i '/\/etc\/hosts/d; /\/etc\/hostname/d;' astroarch_build.sh && \
+    if [ "$KERNEL_FLAVOR" != "rpi" ]; then \
+      sed -i 's/pacman -Syu linux-rpi linux-rpi-headers linux-firmware --noconfirm --ask 4/pacman -Syu linux-firmware --noconfirm --ask 4/' astroarch_build.sh; \
+    fi
 
 RUN bash astroarch_build.sh
 

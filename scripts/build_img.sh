@@ -2,15 +2,41 @@
 set -euo pipefail
 
 # --- settings ---
-IMG=${IMG:-archarm-rpi-aarch64.img}
+BOARD=${BOARD:-rpi}
+IMG=${IMG:-archarm-${BOARD}-aarch64.img}
 SIZE=${SIZE:-20G}         # total image size
 BOOT_MB=${BOOT_MB:-768}   # FAT32 /boot size in MiB
 ROOT_LABEL=${ROOT_LABEL:-ALARM_ROOT}
 BOOT_LABEL=${BOOT_LABEL:-ALARM_BOOT}
 ROOTFS_TAR=${ROOTFS_TAR:-rootfs.tar}
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+BOARD_CONF="${SCRIPT_DIR}/../boards/${BOARD}.conf"
+
+# --- default bootloader install: one raw write at a fixed sector offset ---
+# (Rockchip-style: a single signed blob dropped wholesale ahead of the
+# partition table.) Boards with a different install sequence - e.g. Amlogic's
+# MBR-preserving two-step write - override this function in their .conf.
+install_bootloader() {
+  local uboot_bin="$1" img="$2"
+  dd if="$uboot_bin" of="$img" bs=512 seek="$UBOOT_OFFSET_SECTORS" conv=notrunc,fsync
+}
+
+# --- board profile ---
+# Each boards/<name>.conf sets: KERNEL_FLAVOR, BOOT_STRATEGY (firmware|extlinux),
+# BOOT_START (sectors), UBOOT_URL (extlinux boards that need a bootloader blob
+# written ahead of the partition table), CONSOLE, and optionally overrides
+# UBOOT_OFFSET_SECTORS or the install_bootloader() function above.
+[ -f "$BOARD_CONF" ] || { echo "Unknown BOARD=$BOARD (no $BOARD_CONF)"; exit 1; }
+# shellcheck disable=SC1090
+source "$BOARD_CONF"
+
 # sanity
 [ -f "$ROOTFS_TAR" ] || { echo "Missing $ROOTFS_TAR"; exit 1; }
+case "$BOOT_STRATEGY" in
+  firmware|extlinux) ;;
+  *) echo "Unknown BOOT_STRATEGY=$BOOT_STRATEGY in $BOARD_CONF"; exit 1 ;;
+esac
 
 # tools needed: sfdisk, losetup, mkfs.vfat, mkfs.ext4, tar, rsync or cp -a
 command -v sfdisk >/dev/null
@@ -19,8 +45,7 @@ command -v losetup >/dev/null
 # --- create sparse disk file ---
 truncate -s "$SIZE" "$IMG"
 
-# --- partition table: 1MiB align, 768MiB FAT32 boot, rest ext4 root ---
-BOOT_START=2048                               # 1MiB (512b sectors)
+# --- partition table: BOOT_START (board-defined), 768MiB FAT32 boot, rest ext4 root ---
 BOOT_SIZE=$(( BOOT_MB * 2048 ))               # sectors (MiB * 2048)
 sfdisk "$IMG" <<EOF
 label: dos
@@ -28,6 +53,17 @@ unit: sectors
 ${IMG}1 : start=${BOOT_START}, size=${BOOT_SIZE}, type=c
 ${IMG}2 : start=$((BOOT_START+BOOT_SIZE)), type=83
 EOF
+
+# --- fetch and embed a bootloader blob ahead of the partition table, if any ---
+if [ -n "${UBOOT_URL:-}" ]; then
+  command -v curl >/dev/null
+  UBOOT_BIN=$(mktemp)
+  trap 'rm -f "$UBOOT_BIN"' EXIT
+  curl -fL "$UBOOT_URL" -o "$UBOOT_BIN"
+  install_bootloader "$UBOOT_BIN" "$IMG"
+  rm -f "$UBOOT_BIN"
+  trap - EXIT
+fi
 
 # --- map loop with partitions ---
 LOOP=$(sudo losetup --find --show --partscan "$IMG")
@@ -62,29 +98,20 @@ if [ -d /mnt/arch-root/boot ] && [ -n "$(ls -A /mnt/arch-root/boot)" ]; then
   sudo cp -a /mnt/arch-root/boot/* /mnt/arch-boot/
 fi
 
-# --- minimal boot config depending on strategy ---
-# If you installed linux-rpi (+ raspberrypi-bootloader), firmware boots kernel*.img via config.txt/cmdline.txt
-if [ -f /mnt/arch-boot/kernel8.img ]; then
-  # Only write a fallback config.txt if the rootfs didn't already provide one (e.g. from astroarch_build.sh)
-  if [ ! -f /mnt/arch-boot/config.txt ]; then
-    printf 'arm_64bit=1\nenable_uart=1\n' | sudo tee /mnt/arch-boot/config.txt >/dev/null
-  fi
-  # Fix root= in cmdline.txt: the rootfs copy has the Docker build's /dev/vda2 UUID, not the real PARTUUID.
-  # If a cmdline.txt already exists (e.g. from astroarch_build.sh), patch only root=; otherwise write a minimal one.
-  if [ -f /mnt/arch-boot/cmdline.txt ]; then
-    sudo sed -i "s|root=[^ ]*|root=PARTUUID=${PARTUUID}|" /mnt/arch-boot/cmdline.txt
-  else
-    echo "console=serial0,115200 console=ttyAMA0,115200 root=PARTUUID=${PARTUUID} rw rootwait" \
-      | sudo tee /mnt/arch-boot/cmdline.txt >/dev/null
-  fi
-fi
+# --- build "console=X" args from the board's (possibly multi-value) CONSOLE ---
+CONSOLE_ARGS=""
+for c in $CONSOLE; do
+  CONSOLE_ARGS="${CONSOLE_ARGS}console=${c} "
+done
+CONSOLE_ARGS="${CONSOLE_ARGS% }"
 
-# If you installed linux-aarch64 + uboot-raspberrypi, ensure extlinux.conf exists
-if [ -d /mnt/arch-boot/extlinux ]; then
-  :
-elif [ -f /mnt/arch-boot/u-boot.bin ] || [ -f /mnt/arch-root/boot/u-boot.bin ]; then
-  sudo install -d /mnt/arch-boot/extlinux
-  sudo tee /mnt/arch-boot/extlinux/extlinux.conf >/dev/null <<EOF
+# --- minimal boot config depending on strategy ---
+if [ "$BOOT_STRATEGY" = "extlinux" ]; then
+  # U-Boot (embedded ahead of partition 1 above, if any) loads the kernel via
+  # extlinux.conf; linux-aarch64 provides /Image, /dtbs, /initramfs-linux.img.
+  if [ ! -d /mnt/arch-boot/extlinux ]; then
+    sudo install -d /mnt/arch-boot/extlinux
+    sudo tee /mnt/arch-boot/extlinux/extlinux.conf >/dev/null <<EOF
 DEFAULT arch
 MENU TITLE Arch Linux ARM
 TIMEOUT 3
@@ -93,8 +120,43 @@ LABEL arch
   LINUX /Image
   INITRD /initramfs-linux.img
   FDTDIR /dtbs
-  APPEND root=PARTUUID=${PARTUUID} rw rootwait console=ttyAMA0,115200 console=serial0,115200
+  APPEND root=PARTUUID=${PARTUUID} rw rootwait ${CONSOLE_ARGS}
 EOF
+  fi
+else
+  # Firmware boots kernel*.img via config.txt/cmdline.txt
+  if [ -f /mnt/arch-boot/kernel8.img ]; then
+    # Only write a fallback config.txt if the rootfs didn't already provide one (e.g. from astroarch_build.sh)
+    if [ ! -f /mnt/arch-boot/config.txt ]; then
+      printf 'arm_64bit=1\nenable_uart=1\n' | sudo tee /mnt/arch-boot/config.txt >/dev/null
+    fi
+    # Fix root= in cmdline.txt: the rootfs copy has the Docker build's /dev/vda2 UUID, not the real PARTUUID.
+    # If a cmdline.txt already exists (e.g. from astroarch_build.sh), patch only root=; otherwise write a minimal one.
+    if [ -f /mnt/arch-boot/cmdline.txt ]; then
+      sudo sed -i "s|root=[^ ]*|root=PARTUUID=${PARTUUID}|" /mnt/arch-boot/cmdline.txt
+    else
+      echo "${CONSOLE_ARGS} root=PARTUUID=${PARTUUID} rw rootwait" \
+        | sudo tee /mnt/arch-boot/cmdline.txt >/dev/null
+    fi
+  fi
+
+  # If you installed linux-aarch64 + uboot-raspberrypi, ensure extlinux.conf exists
+  if [ -d /mnt/arch-boot/extlinux ]; then
+    :
+  elif [ -f /mnt/arch-boot/u-boot.bin ] || [ -f /mnt/arch-root/boot/u-boot.bin ]; then
+    sudo install -d /mnt/arch-boot/extlinux
+    sudo tee /mnt/arch-boot/extlinux/extlinux.conf >/dev/null <<EOF
+DEFAULT arch
+MENU TITLE Arch Linux ARM
+TIMEOUT 3
+
+LABEL arch
+  LINUX /Image
+  INITRD /initramfs-linux.img
+  FDTDIR /dtbs
+  APPEND root=PARTUUID=${PARTUUID} rw rootwait ${CONSOLE_ARGS}
+EOF
+  fi
 fi
 
 # --- fstab (Pi 4 aarch64 note: ALARM docs use mmcblk1) ---
